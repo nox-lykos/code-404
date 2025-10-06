@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intelligent Rubrics-Based Evaluator (Dark Mode)</title>
+    <link rel="icon" href="/test/apple-touch-icon.png">
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, query, limit, orderBy, onSnapshot, addDoc, serverTimestamp, setDoc, doc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables injected by the Canvas environment (MUST BE USED)
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Function to handle authentication
+        async function authenticateUser() {
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Firebase Auth Error:", error);
+            }
+        }
+
+        // Set up global access for JavaScript logic
+        window.firebase = {
+            auth, db, appId,
+            authenticateUser,
+            onAuthStateChanged,
+            collection, query, limit, orderBy, onSnapshot, addDoc, serverTimestamp, setDoc, doc, updateDoc, deleteDoc
+        };
+
+        // Start authentication process
+        authenticateUser();
+    </script>
+    
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #111827; /* Dark Background */
+            color: #D1D5DB; /* Light Gray Text */
+        }
+        .card { 
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 10px -5px rgba(0, 0, 0, 0.2); 
+            background-color: #1F2937; /* Darker Card Background */
+        }
+        .code-area { 
+            font-family: 'Consolas', 'Monaco', monospace; 
+            background-color: #000000; /* Deep Black Code Area */
+            color: #90EE90; /* Light Green Text for contrast */
+        }
+        .lint-error { color: #F87171; font-weight: 600; }
+        .lint-success { color: #34D399; font-weight: 600; }
+        .modal-body { max-height: 80vh; overflow-y: auto; }
+        .ai-code-block { overflow-x: auto; max-height: 300px; }
+    </style>
+</head>
+<body class="min-h-screen p-4 sm:p-8">
+
+    <div class="max-w-4xl mx-auto">
+        
+        <!-- Header Section -->
+        <header class="text-center mb-6">
+            <h1 class="text-4xl font-bold text-gray-100">🤖 Rubrics-Based Evaluator</h1>
+            <p class="text-xl text-indigo-400 mt-2">Challenge : Intelligent Pseudocode Assessment</p>
+            <div id="authStatus" class="mt-2 text-sm text-gray-400">Connecting...</div>
+        </header>
+
+        <!-- Main Card Container -->
+        <div class="card p-6 md:p-8 rounded-xl">
+            
+            <!-- Problem Selection Section -->
+            <div class="mb-6 pb-6 border-b border-gray-700">
+                <h2 class="text-2xl font-semibold text-gray-100 mb-2">Select Algorithm Task</h2>
+                
+                <div class="grid md:grid-cols-3 gap-4">
+                    <!-- Dropdown for Algorithm Selection -->
+                    <select id="algorithmSelect" onchange="updateProblemDescription()" 
+                            class="col-span-3 md:col-span-1 p-3 border border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-gray-700 text-gray-200">
+                        <option value="factorial">1. Factorial Calculation ($N!$)</option>
+                        <option value="max_array">2. Find Max Value in Array</option>
+                        <option value="bubble_sort">3. Bubble Sort</option>
+                    </select>
+
+                    <!-- Problem Description (Dynamic) -->
+                    <div id="problemDescription" class="col-span-3 md:col-span-2 p-3 bg-gray-700 rounded-lg text-sm text-gray-300">
+                        <!-- Content updated by JavaScript -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="mb-6">
+                <label class="block text-lg font-medium text-gray-100 mb-2">Input Pseudocode:</label>
+                
+                <!-- File Upload -->
+                <div class="mb-4 p-4 border-2 border-dashed border-gray-600 rounded-lg">
+                    <label for="fileInput" class="block text-sm font-semibold text-gray-300 mb-2">Upload Image or Document (PNG/JPG/PDF):</label>
+                    <input type="file" id="fileInput" accept="image/*,application/pdf" class="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-900 file:text-indigo-200 hover:file:bg-indigo-800"/>
+                    <p class="text-xs text-gray-500 mt-1">Leave blank if pasting text below.</p>
+                </div>
+
+                <!-- Text Area (with Live Linting) -->
+                <label for="pseudocodeInput" class="block text-sm font-semibold text-gray-300 mb-2">... or Paste Text Directly:</label>
+                <textarea id="pseudocodeInput" rows="10" class="code-area w-full p-4 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 border-none resize-none" placeholder="FUNCTION MyAlgorithm(...)" oninput="liveLintCode()"></textarea>
+                <div id="liveLintFeedback" class="mt-2 text-sm"></div>
+            </div>
+
+            <!-- Evaluate Button -->
+            <button onclick="startEvaluation()" 
+                    class="w-full md:w-auto px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-500 transition duration-150 ease-in-out">
+                <span id="buttonText">Submit for Evaluation</span>
+            </button>
+            
+            <!-- Loading Indicator -->
+            <div id="loadingIndicator" class="hidden mt-4 text-center text-indigo-400 font-medium">
+                Evaluating... Please wait.
+            </div>
+
+            <!-- Output/Feedback Section -->
+            <div id="resultsContainer" class="mt-8 pt-6 border-t border-gray-700 hidden">
+                <h2 class="text-3xl font-bold mb-4 text-gray-100">Evaluation Results</h2>
+                
+                <!-- Score Summary -->
+                <div class="flex items-center justify-between p-4 mb-4 rounded-lg bg-indigo-900 border border-indigo-700">
+                    <span class="text-xl font-semibold text-indigo-200">Total Score:</span>
+                    <span id="finalScore" class="text-3xl font-extrabold text-indigo-400">--/100</span>
+                </div>
+
+                <!-- AI Suggestion (Feature 3) -->
+                <div id="aiSuggestionBox" class="p-4 mb-4 rounded-lg bg-yellow-900 border border-yellow-700 hidden">
+                    <h3 class="text-lg font-semibold text-yellow-200 mb-2 flex items-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M16 12h1m-1.636 6.364l.707-.707M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        AI Suggested Improvement:
+                    </h3>
+                    <div class="ai-code-block mt-2 p-3 bg-gray-900 rounded-lg text-sm">
+                        <pre id="aiSuggestionText" class="text-white font-mono whitespace-pre-wrap"></pre>
+                    </div>
+                </div>
+
+                <!-- Feedback Details -->
+                <h3 class="text-xl font-semibold text-gray-200 mb-3">Detailed Rubric Breakdown:</h3>
+                <ul id="feedbackList" class="space-y-3">
+                    <!-- Feedback items will be inserted here -->
+                </ul>
+
+                <!-- Past Evaluations (Feature 1 & 3) -->
+                <div class="mt-8">
+                    <h3 class="text-xl font-semibold text-gray-200 mb-3">Your Recent Evaluations</h3>
+                    <ul id="historyList" class="space-y-2 text-sm text-gray-300">
+                        <li class="text-center text-gray-500">Loading history...</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Custom Alert Modal (instead of alert()) -->
+            <div id="customAlert" class="fixed inset-0 bg-gray-600 bg-opacity-70 flex items-center justify-center hidden z-50">
+                <div class="bg-gray-800 p-6 rounded-lg shadow-xl max-w-sm w-full">
+                    <h4 class="text-lg font-semibold text-red-400 mb-3">Error</h4>
+                    <p id="alertMessage" class="text-gray-200 mb-4"></p>
+                    <button onclick="hideAlert()" class="w-full px-4 py-2 bg-red-600 text-white rounded hover:bg-red-500">Close</button>
+                </div>
+            </div>
+            
+            <!-- History Detail/Edit/Delete Modal (Feature 2 & 3) -->
+            <div id="historyModal" class="fixed inset-0 bg-gray-600 bg-opacity-70 flex items-center justify-center hidden z-50">
+                <div class="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-3xl w-full mx-4">
+                    <div class="flex justify-between items-center border-b pb-3 mb-4 border-gray-700">
+                        <h4 class="text-2xl font-semibold text-gray-100" id="modalTitle">Evaluation Details</h4>
+                        <button onclick="hideHistoryModal()" class="text-gray-400 hover:text-gray-100 text-2xl leading-none">&times;</button>
+                    </div>
+
+                    <div class="modal-body space-y-4">
+                        <div class="flex items-center space-x-2">
+                            <label for="historyNameInput" class="font-medium text-gray-300">Name:</label>
+                            <input type="text" id="historyNameInput" class="flex-grow p-2 border border-gray-600 bg-gray-700 text-gray-200 rounded" placeholder="Enter a name for this evaluation">
+                            <button onclick="renameHistoryItem()" class="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-500 text-sm">Rename</button>
+                            <button onclick="deleteHistoryItem()" class="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-500 text-sm">Delete</button>
+                        </div>
+                        
+                        <div class="p-3 bg-indigo-900 border border-indigo-700 rounded">
+                            <p class="font-bold text-lg text-indigo-300">Score: <span id="modalScore" class="text-2xl font-extrabold"></span></p>
+                            <p class="text-sm text-indigo-400">Algorithm: <span id="modalAlgorithm"></span> | Date: <span id="modalDate"></span></p>
+                        </div>
+                        
+                        <h5 class="font-semibold text-gray-300">Submitted Pseudocode:</h5>
+                        <div class="p-3 bg-gray-900 rounded text-sm font-mono overflow-x-auto max-h-48">
+                            <pre id="modalCode" class="text-gray-200"></pre>
+                        </div>
+
+                        <h5 class="font-semibold text-gray-300">Detailed Feedback:</h5>
+                        <ul id="modalFeedbackList" class="space-y-2 text-sm">
+                            <!-- Feedback items will be inserted here -->
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Footer / Placeholder for LMS Data -->
+        <footer class="mt-8 text-center text-sm text-gray-500">
+            <p>Project Prototype: Intelligent Evaluator | User ID: <span id="currentUserId" class="font-mono text-indigo-300">N/A</span></p>
+        </footer>
+    </div>
+
+    <script>
+        // Set API key as empty string (required for canvas environment)
+        const apiKey = ""; 
+        const GEMINI_VISION_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent";
+        const GEMINI_TEXT_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent";
+
+        let currentUserId = null;
+        let isAuthReady = false;
+        let currentModalDocId = null; // To hold the ID of the document currently in the modal
+
+        // --- Firebase/Auth Setup ---
+        window.addEventListener('load', () => {
+            if (window.firebase) {
+                const { onAuthStateChanged, auth } = window.firebase;
+                
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        currentUserId = user.uid;
+                        document.getElementById('authStatus').textContent = 'User connected.';
+                        document.getElementById('currentUserId').textContent = user.uid;
+                        isAuthReady = true;
+                        loadRecentEvaluations(); 
+                    } else {
+                        document.getElementById('authStatus').textContent = 'Authentication failed. Please reload.';
+                    }
+                });
+            }
+            updateProblemDescription();
+        });
+
+
+        // --- UI Utility Functions ---
+        function showAlert(message) { /* (Same as before) */
+            document.getElementById('alertMessage').textContent = message;
+            document.getElementById('customAlert').classList.remove('hidden');
+        }
+
+        function hideAlert() { /* (Same as before) */
+            document.getElementById('customAlert').classList.add('hidden');
+        }
+
+        function setLoading(isLoading) { /* (Same as before) */
+            document.getElementById('buttonText').textContent = isLoading ? "Evaluating..." : "Submit for Evaluation";
+            document.getElementById('loadingIndicator').classList.toggle('hidden', !isLoading);
+            document.querySelector('button').disabled = isLoading;
+        }
+
+        function hideHistoryModal() {
+            document.getElementById('historyModal').classList.add('hidden');
+            currentModalDocId = null;
+        }
+
+        // --- Data Persistence (Firebase Firestore) ---
+
+        async function saveEvaluation(totalScore, feedback, code, algo) { /* (Same as before) */
+            if (!isAuthReady || !currentUserId) return;
+            const { db, appId, collection, addDoc, serverTimestamp } = window.firebase;
+
+            const path = `artifacts/${appId}/users/${currentUserId}/evaluations`;
+            
+            try {
+                // Add a default name for the evaluation
+                await addDoc(collection(db, path), {
+                    name: `${algo.toUpperCase()} - ${totalScore}/100`,
+                    score: totalScore,
+                    algorithm: algo,
+                    pseudocode: code,
+                    feedback: JSON.stringify(feedback), 
+                    timestamp: serverTimestamp()
+                });
+            } catch (error) {
+                console.error("Error saving evaluation:", error);
+            }
+        }
+        
+        // Feature: Delete
+        async function deleteHistoryItem() {
+            if (!currentModalDocId || !isAuthReady) return;
+            if (!confirm("Are you sure you want to delete this evaluation?")) return;
+            
+            const { db, appId, doc, deleteDoc } = window.firebase;
+            const path = `artifacts/${appId}/users/${currentUserId}/evaluations`;
+            
+            try {
+                await deleteDoc(doc(db, path, currentModalDocId));
+                hideHistoryModal();
+                showAlert("Evaluation deleted successfully.");
+            } catch (error) {
+                console.error("Error deleting document:", error);
+                showAlert("Failed to delete evaluation.");
+            }
+        }
+
+        // Feature: Rename
+        async function renameHistoryItem() {
+            if (!currentModalDocId || !isAuthReady) return;
+            
+            const newName = document.getElementById('historyNameInput').value.trim();
+            if (!newName) {
+                showAlert("Please enter a valid name.");
+                return;
+            }
+
+            const { db, appId, doc, updateDoc } = window.firebase;
+            const path = `artifacts/${appId}/users/${currentUserId}/evaluations`;
+
+            try {
+                await updateDoc(doc(db, path, currentModalDocId), {
+                    name: newName
+                });
+                // Update the modal title immediately for better UX
+                document.getElementById('modalTitle').textContent = newName;
+                showAlert("Evaluation renamed successfully.");
+            } catch (error) {
+                console.error("Error renaming document:", error);
+                showAlert("Failed to rename evaluation.");
+            }
+        }
+
+        /**
+         * Loads the 5 most recent evaluations for the current user. (Updated for UI/UX)
+         */
+        function loadRecentEvaluations() {
+            if (!isAuthReady || !currentUserId) return;
+            const { db, appId, collection, query, orderBy, limit, onSnapshot } = window.firebase;
+            
+            const path = `artifacts/${appId}/users/${currentUserId}/evaluations`;
+            const q = query(collection(db, path), orderBy('timestamp', 'desc'), limit(5));
+            
+            onSnapshot(q, (snapshot) => {
+                const historyList = document.getElementById('historyList');
+                historyList.innerHTML = '';
+                
+                if (snapshot.empty) {
+                    historyList.innerHTML = '<li class="text-center text-gray-500 p-2">No evaluations saved yet.</li>';
+                    return;
+                }
+
+                snapshot.docs.forEach((doc) => {
+                    const data = doc.data();
+                    data.id = doc.id; // Store document ID for CRUD operations
+                    const li = document.createElement('li');
+                    
+                    li.className = 'p-3 bg-gray-700 rounded-lg flex justify-between items-center hover:bg-gray-600 transition duration-150 cursor-pointer';
+                    li.onclick = () => viewHistoryItem(data);
+
+                    li.innerHTML = `
+                        <div class="flex-grow min-w-0">
+                            <span class="font-medium truncate block text-gray-200">${data.name || 'Unnamed Evaluation'}</span> 
+                        </div>
+                        <div class="text-right ml-4">
+                            <span class="font-bold text-indigo-400">${data.score}/100</span>
+                        </div>
+                    `;
+                    historyList.appendChild(li);
+                });
+            }, (error) => {
+                 console.error("Error loading history:", error);
+                 document.getElementById('historyList').innerHTML = '<li class="text-center text-red-400 p-2">Failed to load history.</li>';
+            });
+        }
+        
+        // Feature: View History Item
+        function viewHistoryItem(data) {
+            currentModalDocId = data.id;
+            
+            const date = data.timestamp ? new Date(data.timestamp.toDate()).toLocaleString() : 'N/A';
+            let feedback = [];
+            try { feedback = JSON.parse(data.feedback); } catch (e) { console.error("Error parsing feedback:", e); }
+
+            document.getElementById('modalTitle').textContent = data.name || 'Evaluation Details';
+            document.getElementById('historyNameInput').value = data.name || '';
+            document.getElementById('modalScore').textContent = `${data.score}/100`;
+            document.getElementById('modalAlgorithm').textContent = data.algorithm.toUpperCase();
+            document.getElementById('modalDate').textContent = date;
+            document.getElementById('modalCode').textContent = data.pseudocode;
+
+            const feedbackList = document.getElementById('modalFeedbackList');
+            feedbackList.innerHTML = '';
+
+            feedback.forEach(item => {
+                const li = document.createElement('li');
+                // Dark mode colors for modal feedback
+                const colorClass = item.points < 0 ? 'text-red-300 bg-red-900' : 'text-green-300 bg-green-900';
+                const sign = item.points < 0 ? '' : '+';
+                
+                li.className = `p-2 rounded flex justify-between ${colorClass}`;
+                li.innerHTML = `
+                    <span class="font-medium">${item.text}</span>
+                    <span class="font-bold">${sign}${item.points} pts</span>
+                `;
+                feedbackList.appendChild(li);
+            });
+
+            document.getElementById('historyModal').classList.remove('hidden');
+        }
+
+
+        // --- File/Image Processing and Gemini API Calls (omitted for brevity, assume unchanged) ---
+        
+        async function fileToBase64(file) { /* (Same as before) */
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const base64Data = reader.result.split(',')[1];
+                    resolve({ data: base64Data, mimeType: file.type });
+                };
+                reader.onerror = error => reject(error);
+                reader.readAsDataURL(file);
+            });
+        }
+        
+        async function extractTextFromImage(base64Data, mimeType) { /* (Same as before) */
+            const prompt = "You are a specialized optical character recognition (OCR) system. Extract ALL pseudocode text content clearly and accurately from the provided image/document. Return ONLY the extracted code block, with no conversational response, explanation, or markdown formatting.";
+            const payload = { contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: mimeType, data: base64Data } }] }] };
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    const response = await fetch(`${GEMINI_VISION_URL}?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                    if (!response.ok) throw new Error(`API Request failed with status ${response.status}`);
+                    const result = await response.json();
+                    return result.candidates?.[0]?.content?.parts?.[0]?.text.trim() || "";
+                } catch (error) {
+                    if (attempt < 2) await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+                    else throw new Error(`Failed to extract text after multiple retries. ${error.message}`);
+                }
+            }
+            return ""; 
+        }
+
+        async function getAISuggestion(code, failedRule) { /* (Same as before) */
+            if (!failedRule) return "No major errors detected. Great work!";
+            const systemPrompt = "You are a patient and expert coding tutor. Your task is to take the user's pseudocode and one key error, and provide a corrected, clean block of pseudocode. Use the exact structure of the error provided. Return ONLY the corrected pseudocode block, without any explanation or markdown formatting.";
+            const userQuery = `Original Pseudocode:\n---\n${code}\n---\n\nCorrection Task: The biggest error is: "${failedRule}". Rewrite the entire pseudocode block to fix ONLY this error, ensuring the output is a clean, runnable pseudocode block.`;
+            const payload = { contents: [{ parts: [{ text: userQuery }] }], systemInstruction: { parts: [{ text: systemPrompt }] } };
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    const response = await fetch(`${GEMINI_TEXT_URL}?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                    if (!response.ok) throw new Error(`AI Correction failed with status ${response.status}`);
+                    const result = await response.json();
+                    return result.candidates?.[0]?.content?.parts?.[0]?.text || "AI suggestion service is unavailable.";
+                } catch (error) {
+                    if (attempt < 2) await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+                    else { console.error("AI suggestion failure:", error); return "AI correction failed after multiple retries."; }
+                }
+            }
+            return "AI correction failed.";
+        }
+
+        // --- Core Evaluation Logic (Updated for Bubble Sort) ---
+
+        function updateProblemDescription() {
+            const selector = document.getElementById('algorithmSelect');
+            const descriptionBox = document.getElementById('problemDescription');
+            const selectedAlgo = selector.value;
+            
+            if (selectedAlgo === 'factorial') {
+                descriptionBox.innerHTML = `
+                    <p class="text-gray-300">Write pseudocode for an **iterative** function that calculates the factorial of a non-negative integer $N$.</p>
+                    <div class="mt-2 p-1 bg-gray-600 rounded-md">
+                        <p class="font-mono text-xs text-gray-300">Expected Keywords: FUNCTION, READ, FOR/WHILE, RETURN</p>
+                    </div>
+                `;
+            } else if (selectedAlgo === 'max_array') {
+                descriptionBox.innerHTML = `
+                    <p class="text-gray-300">Write pseudocode for a function that iterates through an **Array (or List)** and returns the single largest value.</p>
+                    <div class="mt-2 p-1 bg-gray-600 rounded-md">
+                        <p class="font-mono text-xs text-gray-300">Expected Keywords: FUNCTION, FOR/WHILE, IF, RETURN</p>
+                    </div>
+                `;
+            } else if (selectedAlgo === 'bubble_sort') {
+                 descriptionBox.innerHTML = `
+                    <p class="text-gray-300">Write pseudocode for the **Bubble Sort** algorithm to sort an array/list in ascending order. This requires nested loops.</p>
+                    <div class="mt-2 p-1 bg-gray-600 rounded-md">
+                        <p class="font-mono text-xs text-gray-300">Expected Keywords: FUNCTION, FOR, IF, SWAP/SET, ARRAY</p>
+                    </div>
+                `;
+            }
+        }
+
+        function preprocessCode(code) { /* (Same as before) */
+            return code.split('\n')
+                       .map(line => line.trim().toUpperCase())
+                       .filter(line => line.length > 0 && !line.startsWith('//') && !line.startsWith('--'));
+        }
+
+        function liveLintCode() { /* (Same as before) */
+            const code = document.getElementById('pseudocodeInput').value.trim();
+            const feedbackDiv = document.getElementById('liveLintFeedback');
+            
+            if (code.length === 0) {
+                feedbackDiv.textContent = '';
+                return;
+            }
+
+            let errors = [];
+
+            if (!code.toUpperCase().trim().startsWith('FUNCTION')) {
+                errors.push("Missing 'FUNCTION' keyword at start.");
+            }
+
+            if (!code.toUpperCase().includes('FOR') && !code.toUpperCase().includes('WHILE') && !code.toUpperCase().includes('IF')) {
+                errors.push("Missing core control flow (FOR, WHILE, or IF).");
+            }
+            
+            if (errors.length > 0) {
+                feedbackDiv.className = 'mt-2 text-sm lint-error';
+                feedbackDiv.innerHTML = '🔴 **Live Check:** ' + errors.join(' | ');
+            } else {
+                feedbackDiv.className = 'mt-2 text-sm lint-success';
+                feedbackDiv.innerHTML = '🟢 **Live Check:** Basic structure looks good!';
+            }
+        }
+
+        // --- Rubric Check Functions (Updated with Bubble Sort Logic) ---
+
+        function checkStyleAndSyntax(lines, algo) {
+            let score = 20;
+            let feedback = [];
+            const codeString = lines.join('\n');
+
+            if (!lines[0].startsWith('FUNCTION')) { score -= 3; feedback.push({points: -3, text: "Style/Syntax: Must start with the keyword 'FUNCTION'."}); }
+            if (!lines[lines.length - 1].endsWith('END FUNCTION')) { score -= 2; feedback.push({points: -2, text: "Style/Syntax: Must end with the keywords 'END FUNCTION'."}); }
+            
+            const loopFound = lines.some(line => line.includes('FOR') || line.includes('WHILE'));
+            if (!loopFound) { score -= 5; feedback.push({points: -5, text: "Style/Syntax: Missing a mandatory iterative structure ('FOR' or 'WHILE' loop)."}); }
+
+            // Algo-specific syntax checks
+            if (algo === 'max_array' && !codeString.includes('IF')) {
+                score -= 5; feedback.push({points: -5, text: "Style/Syntax: Max Value requires a conditional check ('IF')."});
+            } else if (algo === 'bubble_sort') {
+                 const ifConditionFound = codeString.includes('IF');
+                 if (!ifConditionFound) { score -= 5; feedback.push({points: -5, text: "Style/Syntax: Bubble Sort requires a conditional check ('IF') for comparison."}); }
+            }
+            
+            return { score, feedback };
+        }
+
+        function runAlgorithmEvaluation(lines, algo) {
+            let score = 80;
+            let feedback = [];
+            const codeString = lines.join('\n');
+            let passedHeuristic = true; 
+
+            if (algo === 'factorial') {
+                if (codeString.includes('RESULT = 0') || codeString.includes('RESULT := 0')) {
+                    score -= 10; feedback.push({points: -10, text: "Algorithm: Result must be initialized to 1 for multiplication (Rubric 2)."}); passedHeuristic = false;
+                }
+                const coreLogicRegex = /(RESULT\s*[=:]=\s*RESULT\s*[\*X]\s*I)/; 
+                if (!coreLogicRegex.test(codeString)) {
+                    score -= 20; feedback.push({points: -20, text: "Algorithm: Core multiplication logic (Result * Counter) is missing (Rubric 2)."}); passedHeuristic = false;
+                }
+                if (!passedHeuristic) {
+                    score -= 50; feedback.push({points: -50, text: "Correctness: Failed test cases due to missing critical algorithm structures (Rubric 1)."});
+                } else {
+                    feedback.push({points: +50, text: "Correctness: Passed Test Cases (Heuristic check successful, logic seems sound)."});
+                }
+            } else if (algo === 'max_array') {
+                if (!codeString.includes('MAX') || (!codeString.includes('0') && !codeString.includes('ARRAY[0]'))) {
+                    score -= 10; feedback.push({points: -10, text: "Algorithm: MAX variable not initialized correctly (Rubric 2)."}); passedHeuristic = false;
+                }
+                const comparisonRegex = /(IF.*[>])|(IF.*IS GREATER THAN)/; 
+                if (!comparisonRegex.test(codeString)) {
+                    score -= 30; feedback.push({points: -30, text: "Algorithm: Missing or incorrect conditional comparison (IF element > MAX) (Rubric 2)."}); passedHeuristic = false;
+                }
+                if (!passedHeuristic) {
+                    score -= 40; feedback.push({points: -40, text: "Correctness: Failed test cases due to missing critical algorithm structures (Rubric 1)."});
+                } else {
+                    feedback.push({points: +40, text: "Correctness: Passed Test Cases (Heuristic check successful, logic seems sound)."});
+                }
+            } else if (algo === 'bubble_sort') {
+                // BUBBLE SORT LOGIC (80 points)
+                
+                // Algorithm Check 1: Nested Loops (10 points)
+                const forCount = (codeString.match(/FOR/g) || []).length;
+                if (forCount < 2) {
+                    score -= 10; feedback.push({points: -10, text: "Algorithm: Missing mandatory nested loops for a Bubble Sort implementation (Rubric 2)."}); passedHeuristic = false;
+                }
+
+                // Algorithm Check 2: Swap Logic (30 points)
+                const swapLogicFound = codeString.includes('SWAP') || (codeString.match(/[=:]=/g) || []).length >= 3;
+                if (!swapLogicFound) {
+                    score -= 30; feedback.push({points: -30, text: "Algorithm: Missing or incomplete SWAP logic within the comparison block (Rubric 2)."}); passedHeuristic = false;
+                }
+
+                // Correctness Check (40 points)
+                if (!passedHeuristic) {
+                    score -= 40; feedback.push({points: -40, text: "Correctness: Failed test cases due to missing critical algorithm structures (Rubric 1)."});
+                } else {
+                    feedback.push({points: +40, text: "Correctness: Passed Test Cases (Heuristic check successful, logic seems sound)."});
+                }
+            }
+
+            score = Math.max(0, score); 
+            return { score, feedback };
+        }
+
+        
+        /**
+         * Renders the final score, feedback list, and triggers AI suggestion.
+         */
+        async function displayResults(totalScore, feedback, code) {
+            document.getElementById('finalScore').textContent = `${totalScore}/100`;
+            document.getElementById('resultsContainer').classList.remove('hidden');
+            
+            const feedbackList = document.getElementById('feedbackList');
+            const aiSuggestionBox = document.getElementById('aiSuggestionBox');
+            feedbackList.innerHTML = ''; 
+            aiSuggestionBox.classList.add('hidden'); 
+
+            let biggestError = null;
+            if (feedback.length === 0 || totalScore >= 95) {
+                 feedbackList.innerHTML = '<li class="p-3 rounded-lg border text-green-300 bg-green-900 border-green-700 font-semibold">Excellent work! You achieved a top score.</li>';
+            } else {
+                feedback.forEach(item => {
+                    const li = document.createElement('li');
+                    // Dark mode colors for feedback items
+                    const colorClass = item.points < 0 ? 'text-red-300 bg-red-900 border-red-700' : 'text-green-300 bg-green-900 border-green-700';
+                    const sign = item.points < 0 ? '' : '+';
+                    
+                    li.className = `p-3 rounded-lg border flex justify-between items-center ${colorClass}`;
+                    li.innerHTML = `
+                        <span class="font-medium">${item.text}</span>
+                        <span class="font-bold">${sign}${item.points} pts</span>
+                    `;
+                    feedbackList.appendChild(li);
+                    
+                    if (item.points < 0 && (biggestError === null || item.points < biggestError.points)) {
+                        biggestError = item;
+                    }
+                });
+            }
+
+            // Trigger AI Suggestion for the biggest error
+            if (biggestError && biggestError.points < -10) { 
+                document.getElementById('aiSuggestionText').textContent = "Generating AI suggestion...";
+                aiSuggestionBox.classList.remove('hidden');
+
+                const suggestedCode = await getAISuggestion(code, biggestError.text);
+                document.getElementById('aiSuggestionText').textContent = suggestedCode;
+            } else {
+                // Clear any leftover suggestion text if the score is high
+                document.getElementById('aiSuggestionText').textContent = "";
+            }
+        }
+        
+        // --- Main Evaluation Flow ---
+        async function startEvaluation() {
+            let codeInput = document.getElementById('pseudocodeInput').value.trim();
+            const fileInput = document.getElementById('fileInput').files[0];
+            const selectedAlgo = document.getElementById('algorithmSelect').value;
+            
+            document.getElementById('resultsContainer').classList.add('hidden');
+            document.getElementById('aiSuggestionBox').classList.add('hidden');
+
+            if (!codeInput && !fileInput) {
+                showAlert("Please paste pseudocode OR upload an image/document.");
+                return;
+            }
+            if (!isAuthReady) {
+                 showAlert("Application is still initializing. Please wait a moment and try again.");
+                 return;
+            }
+
+            setLoading(true);
+
+            try {
+                if (fileInput) {
+                    const fileData = await fileToBase64(fileInput);
+                    codeInput = await extractTextFromImage(fileData.data, fileData.mimeType);
+                    
+                    if (!codeInput) {
+                        showAlert("Could not extract any pseudocode text from the uploaded file. Please ensure the code is clear.");
+                        return;
+                    }
+                    document.getElementById('pseudocodeInput').value = codeInput;
+                }
+                
+                const lines = preprocessCode(codeInput);
+                const syntaxResult = checkStyleAndSyntax(lines, selectedAlgo);
+                const logicResult = runAlgorithmEvaluation(lines, selectedAlgo);
+
+                const totalScore = syntaxResult.score + logicResult.score;
+                const allFeedback = [...syntaxResult.feedback, ...logicResult.feedback];
+                
+                allFeedback.sort((a, b) => a.points - b.points);
+
+                await displayResults(totalScore, allFeedback, codeInput);
+                
+                await saveEvaluation(totalScore, allFeedback, codeInput, selectedAlgo);
+                
+            } catch (error) {
+                console.error("Evaluation Error:", error);
+                showAlert(`An error occurred: ${error.message || 'Check the console for details.'}`);
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        // Initial setup
+        window.onload = updateProblemDescription;
+        
+    </script>
+</body>
+</html>
